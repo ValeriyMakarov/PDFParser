@@ -1,12 +1,32 @@
-"""
-Задание:
-
-Разработать метод, на вход которого подается PDF файл
-(сам файл предоставляется во вложении). Нужно прочитать всю возможную
-информацию из файла и на выходе вернуть в виде словаря.
-"""
-from pdfminer.high_level import extract_text
+from pdfminer.high_level import extract_text, extract_pages
 import re
+import fitz
+from pyzbar.pyzbar import decode
+from PIL import Image
+
+
+def read_barcodes(pdf_path: str) -> list[dict]:
+    """Reads the first page of PDF document and returns the list of
+    dictionaries with info about decoded barcodes on the page"""
+
+    with fitz.open(pdf_path) as pdf_file:
+        page = pdf_file.load_page(0)
+        pixel_map = page.get_pixmap()
+    page_image = Image.frombytes(
+        "RGB", [pixel_map.width, pixel_map.height], pixel_map.samples
+    )
+    decoded = sorted(
+        decode(page_image),
+        key=lambda x: (x.rect.left, x.rect.top)
+    )
+
+    return [
+        {
+            'barcode_type': barcode.type,
+            'barcode_data': barcode.data.decode('utf-8')
+        }
+        for barcode in decoded
+    ]
 
 
 def get_value_regexp(regexp: str, from_str: str):
@@ -16,10 +36,13 @@ def get_value_regexp(regexp: str, from_str: str):
 
 def read_inner_data_from_pdf(pdf: str) -> dict:
     """Reads data from PDF file"""
+
     text = extract_text(pdf)
+    barcodes = read_barcodes(pdf)
+
     data_dict = {
         'LABEL': get_value_regexp(r'(^(\w+ *)*).*', text),
-        'BARCODE': None,
+        'BARCODE': barcodes[0],
         'PN': get_value_regexp(r'PN: (\w+).*DESCRIPTION:', text),
         'DESCRIPTION': get_value_regexp(r'DESCRIPTION: (\w+).*LOCATION:', text),
         'LOCATION': get_value_regexp(r'LOCATION: (\d+).*RECEIVER#:', text),
@@ -35,19 +58,13 @@ def read_inner_data_from_pdf(pdf: str) -> dict:
         'BATCH#': get_value_regexp(r'BATCH# : (\d+).*REMARK:', text),
         'REMARK': get_value_regexp(r'REMARK:(\S+)*.*TAGGED BY:', text),
         'TARGET BY': {
-            'BARCODE': None,
+            'BARCODE': barcodes[1],
             'Qty': get_value_regexp(r'Qty: (\S+).*DOM:', text),
         },
         'DOM': get_value_regexp(r'DOM: ((\d+\.?){3}).*LOT# :', text),
         'LOT#': get_value_regexp(r'LOT# : (\w+).*NOTES:', text),
         'NOTES': get_value_regexp(r'NOTES:\s+((\S+ *)*).*', text),
-
     }
-    # res = re.search(r'EXP DATE: ((\d+\.?){3}).*CERT SOURCE: '
-    #                 r'(\w+).*SN: (\w+).*CONDITION: (\w+).*UOM: (\w+).*PO: (\w+).*REC.DATE: '
-    #                 r'((\d+\.?){3}).*MFG: (\w+).*BATCH# : (\w+).*REMARK:.*TAGGED BY:.*Qty: '
-    #                 r'(\w+).*DOM: ((\d+\.?){3}).*LOT# : (\w+).*NOTES:.*(\w+).*', text, re.DOTALL)
-    # print(res)
 
     return data_dict
 
